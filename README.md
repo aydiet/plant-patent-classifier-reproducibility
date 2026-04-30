@@ -1,6 +1,6 @@
-# Plant Patent Classifier Appendix D Reproducibility Artifacts
+# Reproducibility Artifacts for "Identifying Plant-Related Patents: Corpus Construction and Global Patterns"
 
-This repository is a public audit companion for Appendix D of the plant-related patent classifier paper. It contains only the source artifacts and safe summary/configuration files listed in the Appendix D reproducibility manifest.
+This repository is a public audit companion for Appendix D of the paper "Identifying Plant-Related Patents: Corpus Construction and Global Patterns". It contains only the source artifacts and safe summary/configuration files listed in the Appendix D reproducibility manifest.
 
 It is not the manuscript repository and it is not a redistributed patent dataset. Manuscript source files, manuscript tables/figures, row-level TIP/PATSTAT exports, patent title/abstract text, translated patent text, model prediction rows, label queues, split manifests, parquet files, and model checkpoints are intentionally excluded.
 
