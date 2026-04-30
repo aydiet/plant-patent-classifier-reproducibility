@@ -1,0 +1,44 @@
+{
+  "base_model": "anferico/bert-for-patents",
+  "created_at_utc": "2026-01-30T14:23:54+00:00",
+  "git_commit": "089d739f7f305693999aa939ac38dcce05f01f69",
+  "hf_export_dir": "models/variety_technology_bert_for_patents_2026-01-30/hf_export",
+  "max_length": 512,
+  "precision_target": null,
+  "pred_test_csv": "metadata/variety_technology_bert_for_patents_predictions_test_2026-01-30.csv",
+  "pred_val_csv": "metadata/variety_technology_bert_for_patents_predictions_val_2026-01-30.csv",
+  "report_md": "metadata/variety_technology_bert_for_patents_report_2026-01-30.md",
+  "run_id": "variety_technology_20260130_151720",
+  "split_counts": {
+    "test": {
+      "technology": 19,
+      "variety": 12
+    },
+    "train": {
+      "technology": 81,
+      "variety": 61
+    },
+    "val": {
+      "technology": 19,
+      "variety": 11
+    }
+  },
+  "test_metrics": {
+    "accuracy": 0.967741935483871,
+    "f1": 0.9743589743589743,
+    "pr_auc": 0.9780207419994773,
+    "precision": 0.95,
+    "recall": 1.0,
+    "roc_auc": 0.9692982456140351
+  },
+  "threshold_method": "max_f1",
+  "threshold_technology": 0.0001140000022132881,
+  "val_metrics": {
+    "accuracy": 0.9666666666666667,
+    "f1": 0.9743589743589743,
+    "pr_auc": 0.9695861940912451,
+    "precision": 0.95,
+    "recall": 1.0,
+    "roc_auc": 0.9569377990430622
+  }
+}

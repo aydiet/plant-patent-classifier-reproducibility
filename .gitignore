@@ -1,0 +1,13 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+.env
+data/
+models/
+paper/
+*.parquet
+*.pt
+*.bin
+*.safetensors
+apple_translation_cli/.build/
