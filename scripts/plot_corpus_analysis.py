@@ -12,12 +12,9 @@ Outputs:
   paper/figures/geography_by_subtype.pdf   (+ .png)
   paper/figures/top_applicants_subtype.pdf (+ .png)
   paper/figures/internationalization.pdf   (+ .png)
-    paper/tables/grant_overview.tex
   paper/tables/corpus_overview.tex
   paper/tables/geographic_specialization.tex
   paper/tables/top_applicants_harmonized.tex
-  paper/tables/grant_rates.tex
-  paper/tables/subtype_comparison.tex
   paper/tables/classifier_uplift_cpc.tex
 
 Usage:
@@ -36,12 +33,6 @@ import matplotlib.ticker as mticker
 import numpy as np
 import pandas as pd
 
-from inpadoc_grant_codes import (
-    build_inpadoc_code_regex,
-    load_f_category_codes_present_in_corpus,
-    register_appln_category_flags,
-)
-
 # ── Paths ─────────────────────────────────────────────────────────────────────
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 META = ROOT / "metadata"
@@ -57,13 +48,6 @@ SCORED = ROOT / "data" / "derived" / (
 )
 HARM = META / "applicant_harmonization.csv"
 HARM_REVIEW = META / "corpus_analysis_applicant_harmonization_review.csv"
-GRANT_PUB_KIND_MAP = META / "grant_publication_kind_map.csv"
-
-grant_codes = load_f_category_codes_present_in_corpus(RAW)
-grant_code_regex = build_inpadoc_code_regex(grant_codes)
-print(
-    f"Grant detection uses {len(grant_codes)} EPO F-category INPADOC codes present in corpus."
-)
 
 # ── Matplotlib style (APA-like figure typography) ───────────────────────────
 mpl.rcParams.update({
@@ -117,46 +101,6 @@ def normalize_applicant_name(name: str | None) -> str:
     normalized = re.sub(r"[^A-Z0-9]+", " ", normalized)
     tokens = [token for token in normalized.split() if token not in LEGAL_SUFFIX_TOKENS]
     return " ".join(tokens)
-
-
-def load_grant_publication_kind_map(path: pathlib.Path) -> pd.DataFrame:
-    """Load authority- and period-specific grant publication kinds."""
-    grant_map = pd.read_csv(path)
-    required = {
-        "authority",
-        "year_from",
-        "year_to",
-        "publn_kind",
-        "counts_as_grant",
-        "source",
-        "note",
-    }
-    missing = required.difference(grant_map.columns)
-    if missing:
-        raise ValueError(f"Grant publication kind map missing columns: {sorted(missing)}")
-
-    grant_map = grant_map.copy()
-    grant_map["authority"] = grant_map["authority"].astype(str).str.strip()
-    grant_map["publn_kind"] = grant_map["publn_kind"].astype(str).str.strip()
-    grant_map["year_from"] = grant_map["year_from"].astype(int)
-    grant_map["year_to"] = grant_map["year_to"].astype(int)
-    grant_map["counts_as_grant"] = grant_map["counts_as_grant"].astype(int)
-
-    dupes = grant_map.duplicated(subset=["authority", "year_from", "year_to", "publn_kind"])
-    if dupes.any():
-        raise ValueError(
-            "Grant publication kind map contains duplicate authority/year/kind rows."
-        )
-    return grant_map
-
-
-def sql_quote_list(values: list[str]) -> str:
-    return ", ".join("'" + value.replace("'", "''") + "'" for value in values)
-
-
-grant_pub_kind_map = load_grant_publication_kind_map(GRANT_PUB_KIND_MAP)
-explicit_grant_pub_authorities = sorted(grant_pub_kind_map["authority"].unique().tolist())
-explicit_grant_pub_authorities_sql = sql_quote_list(explicit_grant_pub_authorities)
 
 
 def compute_hhi(counts: pd.Series) -> float:
@@ -320,36 +264,13 @@ print("Figure: Top applicants by subtype ...")
 
 # Re-query parquet with harmonization
 con = duckdb.connect()
-con.register("_tmp_grant_pub_kind_map", grant_pub_kind_map)
-
-con.sql(f"""
-CREATE OR REPLACE TABLE pub_source AS
-SELECT
-    p.*,
-    YEAR(p.earliest_priority_or_filing_date::DATE) AS filing_year,
-    YEAR(p.publn_date::DATE) AS publn_year,
-    CASE
-        WHEN g.publn_kind IS NOT NULL AND g.counts_as_grant = 1 THEN 1
-        WHEN p.appln_auth NOT IN ({explicit_grant_pub_authorities_sql})
-            AND TRIM(p.publn_kind) IN ('B', 'B1', 'B2')
-        THEN 1
-        ELSE 0
-    END AS is_grant_pub_kind
-FROM read_parquet('{RAW}') p
-LEFT JOIN _tmp_grant_pub_kind_map g
-    ON p.appln_auth = g.authority
-   AND TRIM(p.publn_kind) = g.publn_kind
-   AND COALESCE(
-        YEAR(p.publn_date::DATE),
-        YEAR(p.appln_filing_date::DATE),
-        YEAR(p.earliest_priority_or_filing_date::DATE)
-   ) BETWEEN g.year_from AND g.year_to
-""")
 
 con.sql(f"""
 CREATE OR REPLACE TABLE analysis_base AS
 WITH pub AS (
-    SELECT * FROM pub_source
+    SELECT *,
+        YEAR(earliest_priority_or_filing_date::DATE) AS filing_year
+    FROM read_parquet('{RAW}')
 ),
 scored AS (
     SELECT docdb_family_id, label_pred, subtype_pred
@@ -361,7 +282,6 @@ fam AS (
         MIN(p.filing_year) AS filing_year,
         MAX(s.label_pred) AS plant_pred,
         MAX(s.subtype_pred) AS subtype_pred,
-        MAX(p.is_grant_pub_kind) AS is_granted,
         COUNT(DISTINCT p.publn_auth) AS family_scope,
         MAX(p.has_ep) AS has_ep,
         MAX(p.has_wo) AS has_wo,
@@ -374,7 +294,6 @@ fam AS (
         FIRST(p.ipc_list ORDER BY p.appln_id)
             FILTER (WHERE p.ipc_list IS NOT NULL AND p.ipc_list != '')
             AS ipc_list,
-        MAX(p.legal_event_codes) AS legal_event_codes,
         MAX(CASE WHEN p.publn_auth = 'US' AND TRIM(p.publn_kind) IN ('P','P1','P2','P3','P4','P9') THEN 1 ELSE 0 END) AS has_us_plant_patent,
         MAX(CASE WHEN TRIM(p.appln_kind) = 'U' THEN 1 ELSE 0 END) AS has_utility_model
     FROM pub p
@@ -391,88 +310,9 @@ SELECT
     CASE WHEN f.plant_pred = 'yes' THEN 1 ELSE 0 END AS is_plant,
     CASE WHEN f.subtype_pred = 'variety' THEN 1 ELSE 0 END AS is_variety,
     CASE WHEN f.subtype_pred = 'technology' THEN 1 ELSE 0 END AS is_technology,
-    CASE WHEN f.cpc_list LIKE '%A01H%' OR f.ipc_list LIKE '%A01H%' THEN 1 ELSE 0 END AS has_a01h,
-        CASE WHEN f.is_granted = 1
-            OR REGEXP_MATCHES(COALESCE(f.legal_event_codes, ''), '{grant_code_regex}')
-    THEN 1 ELSE 0 END AS is_granted_combined,
-    CASE WHEN f.legal_event_codes LIKE '%LAPS%'
-         OR f.legal_event_codes LIKE '%PG25%'
-         OR f.legal_event_codes LIKE '%MKLA%'
-         OR f.legal_event_codes LIKE '%MK14%'
-         OR f.legal_event_codes LIKE '%PD00%'
-    THEN 1 ELSE 0 END AS has_lapse_event
+    CASE WHEN f.cpc_list LIKE '%A01H%' OR f.ipc_list LIKE '%A01H%' THEN 1 ELSE 0 END AS has_a01h
 FROM fam f
 WHERE f.filing_year BETWEEN 1985 AND 2023
-""")
-
-# Publication-level analysis table (one row per publication)
-con.sql(f"""
-CREATE OR REPLACE TABLE pub_base AS
-WITH scored AS (
-    SELECT docdb_family_id, label_pred, subtype_pred
-    FROM read_parquet('{SCORED}')
-)
-SELECT
-    p.docdb_family_id,
-    p.appln_id,
-    p.appln_auth,
-    TRIM(p.appln_kind) AS appln_kind,
-    p.publn_auth,
-    p.publn_kind,
-    p.filing_year,
-    p.is_grant_pub_kind,
-    CASE WHEN COALESCE(p.legal_event_codes, '') != '' THEN 1 ELSE 0 END AS has_any_event,
-    CASE WHEN REGEXP_MATCHES(COALESCE(p.legal_event_codes, ''), '{grant_code_regex}')
-        THEN 1 ELSE 0 END AS has_f_event,
-    CASE WHEN p.is_grant_pub_kind = 1
-        OR REGEXP_MATCHES(COALESCE(p.legal_event_codes, ''), '{grant_code_regex}')
-        THEN 1 ELSE 0 END AS is_granted_combined,
-    CASE WHEN s.label_pred = 'yes' THEN 1 ELSE 0 END AS is_plant,
-    CASE WHEN s.subtype_pred = 'variety' THEN 1 ELSE 0 END AS is_variety,
-    CASE WHEN s.subtype_pred = 'technology' THEN 1 ELSE 0 END AS is_technology
-FROM pub_source p
-LEFT JOIN scored s ON p.docdb_family_id = s.docdb_family_id
-WHERE p.filing_year BETWEEN 1985 AND 2023
-""")
-
-# Application-level prosecution table (one row per appln_id).
-# Retain appln_kind so Section 4.3 can exclude translated/validated T-kind
-# records from application-level prosecution statistics while preserving
-# raw authority diagnostics.
-n_f = register_appln_category_flags(con, RAW, "F", "appln_f_events")
-n_h = register_appln_category_flags(con, RAW, "H", "appln_h_events")
-print(
-    f"Application-level flags: {n_f:,} with F-category event; {n_h:,} with H-category event."
-)
-
-con.sql("""
-CREATE OR REPLACE TABLE appln_base AS
-SELECT
-    p.appln_id,
-    MAX(p.docdb_family_id) AS docdb_family_id,
-    MAX(p.appln_auth) AS appln_auth,
-    MAX(p.appln_kind) AS appln_kind,
-    MIN(p.filing_year) AS filing_year,
-    MAX(p.is_grant_pub_kind) AS has_grant_pub_kind,
-    MAX(p.has_any_event) AS has_any_event,
-    MAX(CASE WHEN f.appln_id IS NOT NULL THEN 1 ELSE 0 END) AS has_f_event,
-    MAX(CASE WHEN h.appln_id IS NOT NULL THEN 1 ELSE 0 END) AS has_h_event,
-    MAX(p.is_plant) AS is_plant,
-    MAX(p.is_variety) AS is_variety,
-    MAX(p.is_technology) AS is_technology,
-    MAX(CASE WHEN p.is_grant_pub_kind = 1 OR f.appln_id IS NOT NULL THEN 1 ELSE 0 END)
-        AS is_granted_combined
-FROM pub_base p
-LEFT JOIN appln_f_events f ON p.appln_id = f.appln_id
-LEFT JOIN appln_h_events h ON p.appln_id = h.appln_id
-GROUP BY p.appln_id
-""")
-
-con.sql("""
-CREATE OR REPLACE TABLE appln_base_analysis AS
-SELECT *
-FROM appln_base
-WHERE COALESCE(appln_kind, '') != 'T'
 """)
 
 # Build harmonized applicant counts with deterministic normalization
@@ -624,67 +464,6 @@ print("  -> internationalization.pdf")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Figure: Application-level prosecution status (stacked bar)
-# ══════════════════════════════════════════════════════════════════════════════
-print("Figure: Prosecution status ...")
-# Application-level table: one row per non-T appln_id, plant-related only
-status_by_year = con.sql("""
-WITH classified AS (
-    SELECT
-        filing_year,
-        CASE
-            WHEN is_granted_combined = 1 AND has_h_event = 1 THEN 'Granted (ceased)'
-            WHEN is_granted_combined = 1 THEN 'Granted (active)'
-            ELSE 'Not yet granted'
-        END AS status
-    FROM appln_base_analysis
-    WHERE is_plant = 1
-)
-SELECT
-    filing_year,
-    COUNT(*) FILTER (WHERE status = 'Granted (active)') AS granted_active,
-    COUNT(*) FILTER (WHERE status = 'Granted (ceased)') AS granted_ceased,
-    COUNT(*) FILTER (WHERE status = 'Not yet granted') AS not_granted,
-    COUNT(*) AS total
-FROM classified
-WHERE filing_year BETWEEN 1985 AND 2023
-GROUP BY filing_year
-ORDER BY filing_year
-""").df()
-
-fig, ax = plt.subplots(figsize=(4.15, 3.2))
-years = status_by_year["filing_year"]
-w = 0.8
-
-ax.bar(years, status_by_year["not_granted"],
-       width=w, label="Not yet granted", color="#bdbdbd", zorder=2)
-ax.bar(years, status_by_year["granted_active"],
-       bottom=status_by_year["not_granted"],
-       width=w, label="Granted (active)", color="#2ca02c", zorder=2)
-ax.bar(years, status_by_year["granted_ceased"],
-       bottom=status_by_year["not_granted"] + status_by_year["granted_active"],
-       width=w, label="Granted (ceased)", color="#d62728", zorder=2)
-
-# Cumulative total line
-ax.plot(years, status_by_year["total"], color="black", linewidth=2.0,
-        marker="", zorder=3, label="Total applications")
-
-ax.set_xlabel("Priority year", fontsize=10)
-ax.set_ylabel("Plant-related applications", fontsize=10)
-ax.set_xlim(1984.2, 2023.8)
-ax.xaxis.set_major_locator(mticker.MultipleLocator(10))
-ax.tick_params(axis="both", labelsize=8)
-ax.legend(loc="upper left", frameon=False, fontsize=8, handlelength=1.6, labelspacing=0.3)
-ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{int(x):,}"))
-fig.tight_layout()
-
-for fmt in ("pdf", "png"):
-    fig.savefig(FIGS / f"prosecution_status.{fmt}")
-plt.close(fig)
-print("  -> prosecution_status.pdf")
-
-
-# ══════════════════════════════════════════════════════════════════════════════
 # LATEX TABLES
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -769,45 +548,6 @@ inv_tech = round(100.0 - pp_tech - um_tech, 1)
 var_share = round(100.0 * var_fam / plant_fam, 1)
 tech_share = round(100.0 * tech_fam / plant_fam, 1)
 
-# Application-level grant rates
-app_grant = con.sql("""
-SELECT
-    ROUND(100.0 * SUM(is_granted_combined) / COUNT(*), 1) AS grant_pct
-FROM appln_base_analysis
-""").fetchone()
-app_grant_plant = con.sql("""
-SELECT
-    ROUND(100.0 * SUM(is_granted_combined) / COUNT(*), 1) AS grant_pct
-FROM appln_base_analysis WHERE is_plant = 1
-""").fetchone()
-app_grant_var = con.sql("""
-SELECT
-    ROUND(100.0 * SUM(is_granted_combined) / COUNT(*), 1) AS grant_pct
-FROM appln_base_analysis WHERE is_variety = 1
-""").fetchone()
-app_grant_tech = con.sql("""
-SELECT
-    ROUND(100.0 * SUM(is_granted_combined) / COUNT(*), 1) AS grant_pct
-FROM appln_base_analysis WHERE is_technology = 1
-""").fetchone()
-
-app_lapse = con.sql("""
-SELECT ROUND(100.0 * SUM(has_h_event) / COUNT(*), 1) AS lapse_pct
-FROM appln_base_analysis WHERE is_granted_combined = 1
-""").fetchone()
-app_lapse_plant = con.sql("""
-SELECT ROUND(100.0 * SUM(has_h_event) / COUNT(*), 1) AS lapse_pct
-FROM appln_base_analysis WHERE is_plant = 1 AND is_granted_combined = 1
-""").fetchone()
-app_lapse_var = con.sql("""
-SELECT ROUND(100.0 * SUM(has_h_event) / COUNT(*), 1) AS lapse_pct
-FROM appln_base_analysis WHERE is_variety = 1 AND is_granted_combined = 1
-""").fetchone()
-app_lapse_tech = con.sql("""
-SELECT ROUND(100.0 * SUM(has_h_event) / COUNT(*), 1) AS lapse_pct
-FROM appln_base_analysis WHERE is_technology = 1 AND is_granted_combined = 1
-""").fetchone()
-
 write_tex(TABS / "corpus_overview.tex", f"""\
     \\begin{{table*}}[!t]
     \\centering
@@ -834,30 +574,6 @@ write_tex(TABS / "corpus_overview.tex", f"""\
     publication jurisdictions per family. Variety and Technology are mutually exclusive subtypes of plant-related
     families.}}
     \\end{{table*}}
-""")
-
-write_tex(TABS / "grant_overview.tex", f"""\
-    \\begin{{table}}[t]
-    \\centering
-    \\footnotesize
-    \\setlength{{\\tabcolsep}}{{4pt}}
-    \\caption{{Observed grant rates and cessation among granted applications (application level, 1985--2023)}}
-    \\label{{tab:grant_overview}}
-    \\begin{{tabular}}{{@{{}} l S[table-format=2.1] S[table-format=2.1] @{{}}}}
-    \\toprule
-    Category & {{Grant (\\%)}} & {{\\shortstack[c]{{Cessation among\\\\granted (\\%)}}}} \\\\
-    \\midrule
-    All applications & {app_grant[0]} & {app_lapse[0]} \\\\
-    Plant-related & {app_grant_plant[0]} & {app_lapse_plant[0]} \\\\
-    \\quad Variety & {app_grant_var[0]} & {app_lapse_var[0]} \\\\
-    \\quad Technology & {app_grant_tech[0]} & {app_lapse_tech[0]} \\\\
-    \\bottomrule
-    \\end{{tabular}}
-
-    \\vspace{{3pt}}
-    \\parbox{{0.90\\columnwidth}}{{\\footnotesize
-    \\textit{{Note:}} Application-level rates using the grant and cessation definitions described in Section~\\ref{{sec:prosecution_outcomes}} and excluding translated or validated EP/PCT-derived application records. Rates are observed through the current extract rather than cohort-complete estimates of eventual outcomes. Cessation is measured among granted applications and should be interpreted as a comparative indicator of recorded cessation events rather than as a pure measure of pre-term abandonment.}}
-    \\end{{table}}
 """)
 
 
@@ -895,131 +611,6 @@ write_tex(TABS / "geographic_specialization.tex", f"""\
     LQ = location quotient (authority plant share / global plant share of {100*GLOBAL_PLANT_SHARE:.1f}\\%).
     \\% of plant = authority's share of all plant-related families.
     WO = international PCT filings; EP = European Patent Office filings.}}
-    \\end{{table*}}
-""")
-
-
-# ── Table: Grant Rates (H5) ──────────────────────────────────────────────────
-# Application-level grant rates by application authority.
-# Keep raw authority metrics for auditability, but render the manuscript
-# table from the non-T denominator so offices dominated by translated or
-# validated EP/PCT records remain comparable.
-h5_app = con.sql("""
-SELECT
-    appln_auth AS auth,
-    COUNT(*) AS all_total,
-    ROUND(100.0 * SUM(CASE WHEN appln_kind = 'T' THEN 1 ELSE 0 END) / COUNT(*), 2)
-        AS t_share_all_pct,
-    ROUND(100.0 * SUM(has_any_event) / COUNT(*), 2) AS legal_event_cov_all_pct,
-    ROUND(100.0 * SUM(has_grant_pub_kind) / COUNT(*), 2) AS grant_rate_all_pubkind_pct,
-    ROUND(100.0 * SUM(is_granted_combined) / COUNT(*), 2) AS grant_rate_all_pct,
-    SUM(is_plant) AS plant_total,
-    ROUND(100.0 * SUM(CASE WHEN is_plant = 1 AND appln_kind = 'T' THEN 1 ELSE 0 END)
-        / NULLIF(SUM(is_plant), 0), 2) AS t_share_plant_pct,
-    ROUND(100.0 * SUM(CASE WHEN is_plant = 1 THEN has_any_event ELSE 0 END)
-        / NULLIF(SUM(is_plant), 0), 2) AS legal_event_cov_plant_pct,
-    ROUND(100.0 * SUM(CASE WHEN is_plant = 1 THEN has_grant_pub_kind ELSE 0 END)
-        / NULLIF(SUM(is_plant), 0), 2) AS grant_rate_plant_pubkind_pct,
-    ROUND(100.0 * SUM(CASE WHEN is_plant = 1 THEN is_granted_combined ELSE 0 END)
-        / NULLIF(SUM(is_plant), 0), 2) AS grant_rate_plant_pct,
-    COUNT(*) FILTER (WHERE COALESCE(appln_kind, '') != 'T') AS all_total_non_t,
-    ROUND(100.0 * SUM(CASE WHEN COALESCE(appln_kind, '') != 'T'
-        THEN has_any_event ELSE 0 END)
-        / NULLIF(COUNT(*) FILTER (WHERE COALESCE(appln_kind, '') != 'T'), 0), 2)
-        AS legal_event_cov_all_non_t_pct,
-    ROUND(100.0 * SUM(CASE WHEN COALESCE(appln_kind, '') != 'T'
-        THEN is_granted_combined ELSE 0 END)
-        / NULLIF(COUNT(*) FILTER (WHERE COALESCE(appln_kind, '') != 'T'), 0), 2)
-        AS grant_rate_all_non_t_pct,
-    SUM(CASE WHEN is_plant = 1 AND COALESCE(appln_kind, '') != 'T'
-        THEN 1 ELSE 0 END) AS plant_total_non_t,
-    ROUND(100.0 * SUM(CASE WHEN is_plant = 1 AND COALESCE(appln_kind, '') != 'T'
-        THEN has_any_event ELSE 0 END)
-        / NULLIF(SUM(CASE WHEN is_plant = 1 AND COALESCE(appln_kind, '') != 'T'
-            THEN 1 ELSE 0 END), 0), 2) AS legal_event_cov_plant_non_t_pct,
-    ROUND(100.0 * SUM(CASE WHEN is_plant = 1 AND COALESCE(appln_kind, '') != 'T'
-        THEN is_granted_combined ELSE 0 END)
-        / NULLIF(SUM(CASE WHEN is_plant = 1 AND COALESCE(appln_kind, '') != 'T'
-            THEN 1 ELSE 0 END), 0), 2) AS grant_rate_plant_non_t_pct
-FROM appln_base
-WHERE appln_auth != 'WO'
-GROUP BY appln_auth
-ORDER BY SUM(CASE WHEN is_plant = 1 AND COALESCE(appln_kind, '') != 'T'
-    THEN 1 ELSE 0 END) DESC, SUM(is_plant) DESC, appln_auth
-""").df()
-h5_app["included_in_table10"] = (h5_app["plant_total_non_t"] >= 100).astype(int)
-h5_app.to_csv(META / "corpus_analysis_h5_grant_rates.csv", index=False)
-h5_table = (
-    h5_app.loc[h5_app["included_in_table10"] == 1]
-    .copy()
-    .sort_values(["plant_total_non_t", "plant_total", "auth"], ascending=[False, False, True])
-    .reset_index(drop=True)
-)
-split_idx = int(np.ceil(len(h5_table) / 2))
-h5_left = h5_table.iloc[:split_idx].copy()
-h5_right = h5_table.iloc[split_idx:].copy()
-
-def build_grant_rows(frame: pd.DataFrame) -> str:
-    rows = []
-    for _, r in frame.iterrows():
-        diff = r.grant_rate_plant_non_t_pct - r.grant_rate_all_non_t_pct
-        sign = "+" if diff >= 0 else ""
-        rows.append(
-            f"    {r.auth} & {int(r.all_total_non_t):,} & {r.grant_rate_all_non_t_pct:.1f} "
-            f"& {int(r.plant_total_non_t):,} & {r.grant_rate_plant_non_t_pct:.1f} "
-            f"& {sign}{diff:.1f} & {r.legal_event_cov_plant_non_t_pct:.0f} \\\\"
-        )
-    return "\n".join(rows)
-
-
-grant_body_left = build_grant_rows(h5_left)
-grant_body_right = build_grant_rows(h5_right)
-
-write_tex(TABS / "grant_rates.tex", f"""\
-    \\begin{{table*}}[!tbp]
-    \\centering
-    \\caption{{Domestic-comparable application-level grant rates by application authority}}
-    \\label{{tab:grant_rates}}
-    \\begin{{minipage}}[t]{{0.49\\textwidth}}
-    \\centering
-    \\scriptsize
-    \\setlength{{\\tabcolsep}}{{2pt}}
-    \\begin{{tabular}}{{@{{}} l r S[table-format=3.1] r S[table-format=3.1] S[table-format=+2.1] S[table-format=3.0] @{{}}}}
-    \\toprule
-    & \\multicolumn{{2}}{{c}}{{All applications}} & \\multicolumn{{2}}{{c}}{{Plant-related}} & & \\\\
-    \\cmidrule(lr){{2-3}} \\cmidrule(lr){{4-5}}
-    Auth. & {{$N$}} & {{Grant (\\%)}} & {{$N$}} & {{Grant (\\%)}} & {{$\\Delta$}} & {{LE cov.}} \\\\
-    \\midrule
-{grant_body_left}
-    \\bottomrule
-    \\end{{tabular}}
-    \\end{{minipage}}
-    \\hfill
-    \\begin{{minipage}}[t]{{0.49\\textwidth}}
-    \\centering
-    \\scriptsize
-    \\setlength{{\\tabcolsep}}{{2pt}}
-    \\begin{{tabular}}{{@{{}} l r S[table-format=3.1] r S[table-format=3.1] S[table-format=+2.1] S[table-format=3.0] @{{}}}}
-    \\toprule
-    & \\multicolumn{{2}}{{c}}{{All applications}} & \\multicolumn{{2}}{{c}}{{Plant-related}} & & \\\\
-    \\cmidrule(lr){{2-3}} \\cmidrule(lr){{4-5}}
-    Auth. & {{$N$}} & {{Grant (\\%)}} & {{$N$}} & {{Grant (\\%)}} & {{$\\Delta$}} & {{LE cov.}} \\\\
-    \\midrule
-{grant_body_right}
-    \\bottomrule
-    \\end{{tabular}}
-    \\end{{minipage}}
-
-    \\vspace{{4pt}}
-    \\parbox{{\\textwidth}}{{\\footnotesize
-    \\textit{{Note:}} Auth.\\ = application authority.
-    Grants are identified from authority- and period-specific grant publication kinds
-    plus authority-matched INPADOC category-F events.
-    WO and translated or validated EP/PCT-derived application records are excluded.
-    Jurisdictions with $\\geq 100$ plant-related domestic-comparable applications are shown.
-    $\\Delta$ = plant grant rate minus all-applications grant rate (percentage points).
-    LE cov.\\ = share of plant-related domestic-comparable applications with at least one INPADOC legal event.
-    Low LE-cov. rows should be interpreted cautiously because their grant rates rely primarily on publication-kind signals.}}
     \\end{{table*}}
 """)
 
@@ -1064,14 +655,6 @@ write_tex(TABS / "top_applicants_harmonized.tex", f"""\
     overall patent corpus HHI: {compute_hhi(applicant_base.groupby('applicant').size()):.0f}.}}
     \\end{{table*}}
 """)
-
-
-# ── Table: Subtype Comparison (H9) ───────────────────────────────────────────
-# Compute cessation rates for granted applications by subtype (application-level)
-lapse_var = app_lapse_var[0]
-lapse_tech = app_lapse_tech[0]
-
-write_tex(TABS / "subtype_comparison.tex", "% Deprecated: merged into corpus_overview.tex (Table 7).\n")
 
 
 # ── Table: Classification-code composition + uplift (H10) ────────────────────

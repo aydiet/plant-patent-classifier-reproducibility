@@ -1,6 +1,6 @@
 # Data Availability
 
-This repository does not redistribute patent data from the EPO Technology Intelligence Platform, PATSTAT, OPS, or derived row-level patent corpora.
+This repository does not redistribute patent data from the EPO Technology Intelligence Platform, PATSTAT, external validation registries, or derived row-level patent corpora.
 
 The public package is limited to Appendix D workflow code and safe audit metadata. Excluded files include raw and derived parquet exports, patent title/abstract fields, machine-translated text, annotation queues, split manifests, family-level identifiers, model prediction rows, and model checkpoints.
 

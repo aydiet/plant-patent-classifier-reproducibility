@@ -1,4 +1,0 @@
-Model,Threshold,N,N_pos,N_neg,TP,FP,TN,FN,Prec,Rec,F1,Acc,Mean_prob_pos,PR-AUC,ROC-AUC,Mean_prob_neg
-bert-base-uncased,0.038927,97,97,0,96,0,0,1,1.000,0.990,0.995,0.990,0.9598,N/A,N/A,N/A
-bert-for-patents,0.994587,97,97,0,92,0,0,5,1.000,0.948,0.974,0.948,0.9864,N/A,N/A,N/A
-PaECTER,0.992003,97,97,0,96,0,0,1,1.000,0.990,0.995,0.990,0.9886,N/A,N/A,N/A

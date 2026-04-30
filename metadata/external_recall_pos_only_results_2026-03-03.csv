@@ -1,0 +1,4 @@
+model,n_positives,threshold,recall,true_positives,false_negatives,mean_probability,median_probability,min_probability
+bert-base-uncased,450,0.038927,0.9888888888888889,445,5,0.9753737,0.99648315,0.0017036379
+bert-for-patents,450,0.994587,0.9555555555555556,430,20,0.983632,0.9977426,4.034688e-05
+PaECTER,450,0.992003,0.9933333333333333,447,3,0.99222875,0.9989917,5.885193e-05

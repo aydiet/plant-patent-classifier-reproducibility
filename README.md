@@ -8,7 +8,7 @@ It is not the manuscript repository and it is not a redistributed patent dataset
 
 - Appendix D workflow scripts and the TIP/PATSTAT SQL export query in `scripts/`.
 - The Apple Translation command-line interface source listed in Appendix D, with Swift build outputs removed.
-- Safe Appendix D metadata summaries in `metadata/`, including query logs, model comparison reports, model run configurations/metrics, and aggregate external recall results.
+- Safe Appendix D metadata summaries in `metadata/`, including query logs, model comparison reports, model run configurations/metrics, and aggregate external recall results for the positive-only external validation set.
 - `manifests/excluded_appendix_d_artifacts.csv`, which records listed Appendix D artifacts that are not public, with local sizes and SHA-256 checksums where available.
 
 ## Not Included

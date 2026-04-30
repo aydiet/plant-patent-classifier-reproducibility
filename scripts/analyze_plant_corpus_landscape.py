@@ -10,15 +10,8 @@ Usage:
 """
 
 import pathlib
-import json
 import duckdb
 import pandas as pd
-
-from inpadoc_grant_codes import (
-    build_inpadoc_code_regex,
-    load_f_category_codes_present_in_corpus,
-    register_appln_category_flags,
-)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 RAW = ROOT / "data" / "raw" / "global_corpus_publevel_plus.parquet"
@@ -29,19 +22,6 @@ FIGDATA.mkdir(parents=True, exist_ok=True)
 
 con = duckdb.connect()
 
-grant_codes = load_f_category_codes_present_in_corpus(RAW)
-grant_code_regex = build_inpadoc_code_regex(grant_codes)
-print(
-    f"Grant detection uses {len(grant_codes)} EPO F-category INPADOC codes present in corpus."
-)
-
-# Pre-compute application-level lapse flags using authority-aware H-category matching
-n_h_applns = register_appln_category_flags(con, RAW, "H", "_appln_h_flags")
-print(
-    f"Lapse detection: {n_h_applns:,} applications with authority-matched "
-    "INPADOC H-category (cessation) events."
-)
-
 # ── Helper: create family-level analysis table ────────────────────────────────
 # Join scored predictions to publication-level data, derive fields, collapse to family level
 
@@ -50,8 +30,7 @@ con.sql(f"""
 CREATE OR REPLACE TABLE analysis_base AS
 WITH pub AS (
     SELECT *,
-        YEAR(earliest_priority_or_filing_date::DATE) AS filing_year,
-        CASE WHEN TRIM(publn_kind) IN ('B','B1','B2') THEN 1 ELSE 0 END AS is_grant_pub
+        YEAR(earliest_priority_or_filing_date::DATE) AS filing_year
     FROM read_parquet('{RAW}')
 ),
 scored AS (
@@ -65,8 +44,6 @@ fam AS (
         -- Plant status from scored
         MAX(s.label_pred) AS plant_pred,
         MAX(s.subtype_pred) AS subtype_pred,
-        -- Grant status: family has at least one grant publication
-        MAX(p.is_grant_pub) AS is_granted,
         -- Family scope: distinct publication authorities
         COUNT(DISTINCT p.publn_auth) AS family_scope,
         MAX(p.has_ep) AS has_ep,
@@ -80,10 +57,6 @@ fam AS (
         -- CPC and IPC lists (from any pub)
         FIRST(p.cpc_list ORDER BY p.appln_id) FILTER (WHERE p.cpc_list IS NOT NULL AND p.cpc_list != '') AS cpc_list,
         FIRST(p.ipc_list ORDER BY p.appln_id) FILTER (WHERE p.ipc_list IS NOT NULL AND p.ipc_list != '') AS ipc_list,
-        -- Legal event fields (INPADOC)
-        MAX(p.legal_event_codes) AS legal_event_codes,
-        -- H-category lapse flag (authority-aware, from pre-computed table)
-        MAX(CASE WHEN hf.appln_id IS NOT NULL THEN 1 ELSE 0 END) AS has_lapse_event,
         -- US Plant Patent flag (35 USC 161): any P-kind US publication
         MAX(CASE WHEN p.publn_auth = 'US' AND TRIM(p.publn_kind) IN ('P','P1','P2','P3','P4','P9') THEN 1 ELSE 0 END) AS has_us_plant_patent,
         -- Utility model flag
@@ -93,7 +66,6 @@ fam AS (
         COUNT(*) AS n_publications
     FROM pub p
     LEFT JOIN scored s ON p.docdb_family_id = s.docdb_family_id
-    LEFT JOIN _appln_h_flags hf ON p.appln_id = hf.appln_id
     GROUP BY p.docdb_family_id
 )
 SELECT
@@ -117,13 +89,6 @@ SELECT
     CASE WHEN f.subtype_pred = 'technology' THEN 1 ELSE 0 END AS is_technology,
     -- Has A01H code
     CASE WHEN f.cpc_list LIKE '%A01H%' OR f.ipc_list LIKE '%A01H%' THEN 1 ELSE 0 END AS has_a01h,
-        -- Combined grant status: B-kind publication OR any corpus-present INPADOC code
-        -- that the EPO classifies under category F (IP right grant)
-    CASE WHEN f.is_granted = 1
-            OR REGEXP_MATCHES(COALESCE(f.legal_event_codes, ''), '{grant_code_regex}')
-    THEN 1 ELSE 0 END AS is_granted_combined,
-    -- Lapse indicator: passed through from fam CTE (authority-aware H-category)
-    f.has_lapse_event,
     -- US Plant Patent and utility model (pass through)
     f.has_us_plant_patent,
     f.has_utility_model,
@@ -140,73 +105,6 @@ WHERE f.filing_year BETWEEN 1985 AND 2023
 total = con.sql("SELECT COUNT(*) FROM analysis_base").fetchone()[0]
 plant = con.sql("SELECT SUM(is_plant) FROM analysis_base").fetchone()[0]
 print(f"Analysis base: {total:,} families (1985-2023), {plant:,} plant-related")
-
-# ── Helper: create publication-level analysis table ───────────────────────────
-# Each row = one publication record with per-pub grant/legal indicators
-
-print("Building publication-level analysis table...")
-con.sql(f"""
-CREATE OR REPLACE TABLE pub_base AS
-WITH pub AS (
-    SELECT *,
-        YEAR(earliest_priority_or_filing_date::DATE) AS filing_year,
-        CASE WHEN TRIM(publn_kind) IN ('B','B1','B2') THEN 1 ELSE 0 END AS is_grant_pub
-    FROM read_parquet('{RAW}')
-),
-scored AS (
-    SELECT docdb_family_id, label_pred, subtype_pred
-    FROM read_parquet('{SCORED}')
-)
-SELECT
-    p.docdb_family_id,
-    p.appln_id,
-    p.appln_auth,
-    p.appln_kind,
-    p.publn_auth,
-    p.publn_kind,
-    p.publn_date,
-    p.filing_year,
-    -- Publication-level grant indicator (B-kind)
-    p.is_grant_pub,
-    -- INPADOC F-category grant signal (per appln_id)
-    CASE WHEN REGEXP_MATCHES(COALESCE(p.legal_event_codes, ''), '{grant_code_regex}')
-        THEN 1 ELSE 0 END AS has_f_event,
-    -- Combined grant indicator (B-kind OR F-category)
-    CASE WHEN p.is_grant_pub = 1
-        OR REGEXP_MATCHES(COALESCE(p.legal_event_codes, ''), '{grant_code_regex}')
-        THEN 1 ELSE 0 END AS is_granted_combined,
-    -- Lapse indicator (authority-aware H-category, from pre-computed table)
-    CASE WHEN hf.appln_id IS NOT NULL THEN 1 ELSE 0 END AS has_lapse_event,
-    -- Legal event metadata
-    p.legal_event_count,
-    p.first_legal_event_date,
-    p.last_legal_event_date,
-    p.legal_event_codes,
-    -- Plant classification (family-level, from scored)
-    CASE WHEN s.label_pred = 'yes' THEN 1 ELSE 0 END AS is_plant,
-    CASE WHEN s.subtype_pred = 'variety' THEN 1 ELSE 0 END AS is_variety,
-    CASE WHEN s.subtype_pred = 'technology' THEN 1 ELSE 0 END AS is_technology,
-    -- Patent instrument indicators (per publication)
-    CASE WHEN p.publn_auth = 'US' AND TRIM(p.publn_kind) IN ('P','P1','P2','P3','P4','P9')
-        THEN 1 ELSE 0 END AS is_us_plant_patent_pub,
-    CASE WHEN TRIM(p.appln_kind) = 'U' THEN 1 ELSE 0 END AS is_utility_model,
-    -- Classification codes
-    p.cpc_list,
-    p.ipc_list,
-    CASE WHEN p.cpc_list LIKE '%A01H%' OR p.ipc_list LIKE '%A01H%'
-        THEN 1 ELSE 0 END AS has_a01h,
-    -- Family scope (pre-computed in raw)
-    p.has_ep,
-    p.has_wo
-FROM pub p
-LEFT JOIN scored s ON p.docdb_family_id = s.docdb_family_id
-LEFT JOIN _appln_h_flags hf ON p.appln_id = hf.appln_id
-WHERE p.filing_year BETWEEN 1985 AND 2023
-""")
-
-pub_total = con.sql("SELECT COUNT(*) FROM pub_base").fetchone()[0]
-pub_plant = con.sql("SELECT SUM(is_plant) FROM pub_base").fetchone()[0]
-print(f"Publication-level base: {pub_total:,} publications (1985-2023), {pub_plant:,} plant-related")
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # H1: Growth trends — plant-related vs. baseline
@@ -329,121 +227,9 @@ h4.to_csv(META / "corpus_analysis_h4_internationalization.csv", index=False)
 print(h4.tail(10).to_string())
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# H5: Grant rates (publication level)
+# H5: Patent instrument breakdown (plant families)
 # ═══════════════════════════════════════════════════════════════════════════════
-print("\n=== H5: Grant rates (publication level) ===")
-h5_overall = con.sql("""
-SELECT
-    'All publications' AS category,
-    COUNT(*) AS total_pubs,
-    SUM(is_grant_pub) AS grant_pubs_bkind,
-    ROUND(100.0 * SUM(is_grant_pub) / COUNT(*), 2) AS grant_rate_bkind_pct,
-    SUM(is_granted_combined) AS grant_pubs_combined,
-    ROUND(100.0 * SUM(is_granted_combined) / COUNT(*), 2) AS grant_rate_combined_pct,
-    COUNT(DISTINCT docdb_family_id) AS total_families
-FROM pub_base
-UNION ALL
-SELECT
-    'Plant-related' AS category,
-    COUNT(*), SUM(is_grant_pub),
-    ROUND(100.0 * SUM(is_grant_pub) / COUNT(*), 2),
-    SUM(is_granted_combined),
-    ROUND(100.0 * SUM(is_granted_combined) / COUNT(*), 2),
-    COUNT(DISTINCT docdb_family_id)
-FROM pub_base WHERE is_plant = 1
-UNION ALL
-SELECT
-    'Variety', COUNT(*), SUM(is_grant_pub),
-    ROUND(100.0 * SUM(is_grant_pub) / COUNT(*), 2),
-    SUM(is_granted_combined),
-    ROUND(100.0 * SUM(is_granted_combined) / COUNT(*), 2),
-    COUNT(DISTINCT docdb_family_id)
-FROM pub_base WHERE is_variety = 1
-UNION ALL
-SELECT
-    'Technology', COUNT(*), SUM(is_grant_pub),
-    ROUND(100.0 * SUM(is_grant_pub) / COUNT(*), 2),
-    SUM(is_granted_combined),
-    ROUND(100.0 * SUM(is_granted_combined) / COUNT(*), 2),
-    COUNT(DISTINCT docdb_family_id)
-FROM pub_base WHERE is_technology = 1
-""").df()
-print(h5_overall.to_string())
-
-# Grant rate by publication authority (publication level)
-h5_by_auth = con.sql("""
-SELECT 
-    publn_auth AS auth,
-    COUNT(*) AS all_total,
-    ROUND(100.0 * SUM(is_grant_pub) / COUNT(*), 2) AS grant_rate_all_bkind_pct,
-    ROUND(100.0 * SUM(is_granted_combined) / COUNT(*), 2) AS grant_rate_all_pct,
-    SUM(is_plant) AS plant_total,
-    ROUND(100.0 * SUM(CASE WHEN is_plant = 1 THEN is_grant_pub ELSE 0 END)
-        / NULLIF(SUM(is_plant), 0), 2) AS grant_rate_plant_bkind_pct,
-    ROUND(100.0 * SUM(CASE WHEN is_plant = 1 THEN is_granted_combined ELSE 0 END)
-        / NULLIF(SUM(is_plant), 0), 2) AS grant_rate_plant_pct
-FROM pub_base
-GROUP BY publn_auth
-HAVING SUM(is_plant) >= 100
-ORDER BY SUM(is_plant) DESC
-LIMIT 15
-""").df()
-h5_by_auth.to_csv(META / "corpus_analysis_h5_grant_rates.csv", index=False)
-print(h5_by_auth.to_string())
-
-# Lapse rates by subtype (among combined-granted families)
-print("\n=== H5b: Lapse rates (family level) ===")
-h5_lapse = con.sql("""
-SELECT
-    CASE WHEN is_variety = 1 THEN 'Variety'
-         WHEN is_technology = 1 THEN 'Technology'
-         ELSE 'Other' END AS subtype,
-    COUNT(*) AS granted_families,
-    SUM(has_lapse_event) AS with_lapse_event,
-    ROUND(100.0 * SUM(has_lapse_event) / COUNT(*), 1) AS lapse_rate_pct
-FROM analysis_base
-WHERE is_plant = 1 AND is_granted_combined = 1
-GROUP BY subtype
-ORDER BY subtype
-""").df()
-h5_lapse.to_csv(META / "corpus_analysis_h5b_lapse_rates.csv", index=False)
-print(h5_lapse.to_string())
-
-# Lapse rates (publication level, for grant_overview table)
-print("\n=== H5b-pub: Lapse rates (publication level) ===")
-h5_lapse_pub = con.sql("""
-SELECT
-    'All publications' AS category,
-    SUM(is_granted_combined) AS granted_pubs,
-    SUM(CASE WHEN is_granted_combined = 1 THEN has_lapse_event ELSE 0 END) AS lapsed_pubs,
-    ROUND(100.0 * SUM(CASE WHEN is_granted_combined = 1 THEN has_lapse_event ELSE 0 END)
-        / NULLIF(SUM(is_granted_combined), 0), 1) AS lapse_rate_pct
-FROM pub_base
-UNION ALL
-SELECT 'Plant-related', SUM(is_granted_combined),
-    SUM(CASE WHEN is_granted_combined = 1 THEN has_lapse_event ELSE 0 END),
-    ROUND(100.0 * SUM(CASE WHEN is_granted_combined = 1 THEN has_lapse_event ELSE 0 END)
-        / NULLIF(SUM(is_granted_combined), 0), 1)
-FROM pub_base WHERE is_plant = 1
-UNION ALL
-SELECT 'Variety', SUM(is_granted_combined),
-    SUM(CASE WHEN is_granted_combined = 1 THEN has_lapse_event ELSE 0 END),
-    ROUND(100.0 * SUM(CASE WHEN is_granted_combined = 1 THEN has_lapse_event ELSE 0 END)
-        / NULLIF(SUM(is_granted_combined), 0), 1)
-FROM pub_base WHERE is_variety = 1
-UNION ALL
-SELECT 'Technology', SUM(is_granted_combined),
-    SUM(CASE WHEN is_granted_combined = 1 THEN has_lapse_event ELSE 0 END),
-    ROUND(100.0 * SUM(CASE WHEN is_granted_combined = 1 THEN has_lapse_event ELSE 0 END)
-        / NULLIF(SUM(is_granted_combined), 0), 1)
-FROM pub_base WHERE is_technology = 1
-""").df()
-print(h5_lapse_pub.to_string())
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# H5c: Patent instrument breakdown (plant families)
-# ═══════════════════════════════════════════════════════════════════════════════
-print("\n=== H5c: Patent instrument breakdown ===")
+print("\n=== H5: Patent instrument breakdown ===")
 h5c = con.sql("""
 SELECT
     CASE WHEN is_variety = 1 THEN 'Variety'
@@ -535,32 +321,12 @@ SELECT
     ROUND(AVG(family_scope), 3) AS avg_scope,
     ROUND(MEDIAN(family_scope), 1) AS median_scope,
     ROUND(100.0 * AVG(has_ep), 2) AS pct_ep,
-    ROUND(100.0 * AVG(has_wo), 2) AS pct_wo,
-    ROUND(100.0 * SUM(is_granted) / COUNT(*), 2) AS grant_rate_bkind_pct,
-    ROUND(100.0 * SUM(is_granted_combined) / COUNT(*), 2) AS grant_rate_fam_pct,
-    ROUND(100.0 * SUM(CASE WHEN is_granted_combined = 1 THEN has_lapse_event ELSE 0 END)
-        / NULLIF(SUM(is_granted_combined), 0), 1) AS lapse_rate_pct
+    ROUND(100.0 * AVG(has_wo), 2) AS pct_wo
 FROM analysis_base
 WHERE is_plant = 1
 GROUP BY subtype_pred
 """).df()
-# Add publication-level grant rates
-h9_pub = con.sql("""
-SELECT
-    CASE WHEN is_variety = 1 THEN 'variety'
-         WHEN is_technology = 1 THEN 'technology'
-    END AS subtype,
-    COUNT(*) AS n_pubs,
-    ROUND(100.0 * SUM(is_grant_pub) / COUNT(*), 2) AS grant_rate_pub_bkind_pct,
-    ROUND(100.0 * SUM(is_granted_combined) / COUNT(*), 2) AS grant_rate_pub_combined_pct
-FROM pub_base
-WHERE is_plant = 1
-    AND (is_variety = 1 OR is_technology = 1)
-GROUP BY CASE WHEN is_variety = 1 THEN 'variety' WHEN is_technology = 1 THEN 'technology' END
-""").df()
 print(h9.to_string())
-print("\nPublication-level grant rates by subtype:")
-print(h9_pub.to_string())
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # H10: Classifier uplift over A01H
