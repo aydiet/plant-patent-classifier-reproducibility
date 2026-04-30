@@ -1,6 +1,6 @@
 ## TIP / PATSTAT Query Log
 
-**Project:** Dynamic efficiency of patents in plant breeding
+**Project:** Identifying Plant-Related Patents: Corpus Construction and Global Patterns
 **Author:** Aylish Dietrich
 **Platform:** EPO Technology Intelligence Platform (TIP – PATSTAT BigQuery)
 **Execution date:** 2026-01-06

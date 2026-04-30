@@ -11,7 +11,9 @@ import pandas as pd
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
         description=(
-            "Run the TIP/PATSTAT export query for the publication-level corpus and write Parquet outputs. "
+            "Run the TIP/PATSTAT export query for "
+            "'Identifying Plant-Related Patents: Corpus Construction and Global Patterns' "
+            "and write publication- and family-level Parquet outputs. "
             "Requires access to EPO TIP PATSTAT BigQuery via epo.tipdata.patstat.PatstatClient."
         )
     )

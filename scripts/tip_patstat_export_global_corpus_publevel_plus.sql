@@ -1,5 +1,5 @@
 WITH
--- A) Publication-level base in your time window (GLOBAL)
+-- A) Publication-level base in the manuscript extraction window (global scope)
 pubs AS (
   SELECT
     p.appln_id,
@@ -38,7 +38,7 @@ hits AS (
     REPLACE(i.ipc_class_symbol,' ','') LIKE 'C12Q1/68%'
 ),
 
--- 4) Title/Abstract: English preferred, else fallback to any language + language codes
+-- C) Title/abstract fields: English preferred, else fallback to any language + language codes
 titles_en AS (
   SELECT appln_id, appln_title AS title_en
   FROM tls202_appln_title
@@ -66,7 +66,7 @@ abstracts_any AS (
   GROUP BY appln_id
 ),
 
--- CPC/IPC lists per application
+-- D) CPC/IPC lists per application
 cpc_agg AS (
   SELECT
     appln_id,
@@ -82,7 +82,7 @@ ipc_agg AS (
   GROUP BY appln_id
 ),
 
--- 2 + 3) Applicants + applicant countries
+-- E) Applicants + applicant countries
 applicants AS (
   SELECT
     pa.appln_id,
@@ -94,7 +94,7 @@ applicants AS (
   GROUP BY pa.appln_id
 ),
 
--- 2 + 3) Inventors + inventor countries
+-- F) Inventors + inventor countries
 inventors AS (
   SELECT
     pa.appln_id,
@@ -127,7 +127,7 @@ family_earliest_filing AS (
   GROUP BY docdb_family_id
 ),
 
--- 5) Family authorities list + EP/WO flags (based on publications)
+-- G) Family authorities list + EP/WO flags (based on publications)
 family_auths AS (
   SELECT
     a.docdb_family_id,
@@ -139,7 +139,7 @@ family_auths AS (
   GROUP BY a.docdb_family_id
 ),
 
--- 7) Legal events summary per family (use event_effective_date in your schema)
+-- H) Legal events summary per family (TIP/PATSTAT schema uses event_effective_date)
 legal_events AS (
   SELECT
     a.docdb_family_id,

@@ -338,7 +338,8 @@ def build_assets(inputs: Inputs, *, top_n_codes: int) -> None:
         rows=mc_rows,
     )
 
-    # 3) Gold test eval
+    # 3) Gold test eval. The "_apples" suffix is a historical run label for
+    # the fixed-threshold comparison report used by the manuscript tables.
     gold = _read_text(md / "gold_test_model_comparison_2026-01-30_apples.md")
     gold_headers, gold_rows = _extract_first_md_table(gold, start_after="## Summary table")
     _write_latex_table(
@@ -358,7 +359,8 @@ def build_assets(inputs: Inputs, *, top_n_codes: int) -> None:
         rows=gold_fixed_rows,
     )
 
-    # 4) Variety vs technology
+    # 4) Variety vs technology. The "_quick" suffix is a historical run label;
+    # the generated manuscript table uses the finalized table caption below.
     vt = _read_text(md / "variety_technology_model_comparison_2026-01-30_quick.md")
     vt_ch_headers, vt_ch_rows = _extract_first_md_table(vt, start_after="## At each model's chosen threshold")
     _write_latex_table(

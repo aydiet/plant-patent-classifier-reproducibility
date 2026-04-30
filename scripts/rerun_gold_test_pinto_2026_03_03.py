@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Re-evaluate three plant patent classifiers on the PINTO 2026-03-03 gold test.
+Re-evaluate three plant-related patent-family classifiers on the PINTO 2026-03-03 gold test.
 Uses pre-selected thresholds from validation split.
 
 Input:  metadata/gold_test_pinto_2026-03-03_reproducibility.parquet  (balanced: 97 pos / 97 neg)
@@ -9,6 +9,8 @@ Input:  metadata/gold_test_pinto_2026-03-03_reproducibility.parquet  (balanced: 
 Output: metrics CSV and prediction probabilities CSV.
 """
 import argparse
+from pathlib import Path
+
 import pandas as pd
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
@@ -20,13 +22,13 @@ parser.add_argument('--positives-only', action='store_true',
                     help='Evaluate on positives only (recall + probability distribution)')
 args = parser.parse_args()
 
-base = '/Users/aylishdietrich/Documents/plant_patent_classifier'
+base = Path(__file__).resolve().parents[1]
 
 if args.positives_only:
-    parquet_path = f'{base}/metadata/gold_test_pinto_2026-03-03_positives_only.parquet'
+    parquet_path = base / 'metadata/gold_test_pinto_2026-03-03_positives_only.parquet'
     tag = 'pinto_2026-03-03_pos_only'
 else:
-    parquet_path = f'{base}/metadata/gold_test_pinto_2026-03-03_reproducibility.parquet'
+    parquet_path = base / 'metadata/gold_test_pinto_2026-03-03_reproducibility.parquet'
     tag = 'pinto_2026-03-03'
 
 # Load gold test
@@ -46,9 +48,9 @@ full_text['input_text'] = full_text['appln_title_en_final'] + '\n\n' + full_text
 # Configuration — fine-tuned January models and their validation-selected thresholds
 thresholds = {'bert-base-uncased': 0.038927, 'bert-for-patents': 0.994587, 'PaECTER': 0.992003}
 checkpoints = {
-    'bert-base-uncased': f'{base}/models/bert_base_uncased_2026-01-28/hf_export',
-    'bert-for-patents': f'{base}/models/bert_for_patents_2026-01-29_safe/hf_export',
-    'PaECTER': f'{base}/models/paecter_2026-01-29_rerun/hf_export',
+    'bert-base-uncased': base / 'models/bert_base_uncased_2026-01-28/hf_export',
+    'bert-for-patents': base / 'models/bert_for_patents_2026-01-29_safe/hf_export',
+    'PaECTER': base / 'models/paecter_2026-01-29_rerun/hf_export',
 }
 
 results = []
@@ -56,8 +58,8 @@ device = torch.device('mps' if torch.backends.mps.is_available() else 'cpu')
 
 for model_name in ['bert-base-uncased', 'bert-for-patents', 'PaECTER']:
     print(f'\nProcessing {model_name}...')
-    tokenizer = AutoTokenizer.from_pretrained(checkpoints[model_name])
-    model = AutoModelForSequenceClassification.from_pretrained(checkpoints[model_name]).to(device).eval()
+    tokenizer = AutoTokenizer.from_pretrained(str(checkpoints[model_name]))
+    model = AutoModelForSequenceClassification.from_pretrained(str(checkpoints[model_name])).to(device).eval()
 
     probs = []
     with torch.no_grad():
@@ -118,9 +120,9 @@ for model_name in ['bert-base-uncased', 'bert-for-patents', 'PaECTER']:
 
 # Save results
 df = pd.DataFrame(results)
-df.to_csv(f'{base}/metadata/gold_test_{tag}_results.csv', index=False)
+df.to_csv(base / f'metadata/gold_test_{tag}_results.csv', index=False)
 full_text[['docdb_family_id', 'gold_label', 'bert-base-uncased_prob', 'bert-for-patents_prob', 'PaECTER_prob']].to_csv(
-    f'{base}/metadata/gold_test_{tag}_predictions.csv', index=False)
+    base / f'metadata/gold_test_{tag}_predictions.csv', index=False)
 
 print('\n' + '='*60)
 print('FINAL RESULTS')

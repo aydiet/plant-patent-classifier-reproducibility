@@ -25,6 +25,8 @@ All results below use the same labeled dataset and deterministic split manifest:
 - If optimizing for **fewer false negatives** (recall leaning): `bert-base-uncased` hit perfect test recall in this run.
 - `paecter` is consistently strong and stable; the rerun confirms no MPS OOM issues under conservative settings.
 
+The suffixes `_safe` and `_rerun` in the referenced report filenames are historical run labels. They identify the January 2026 runs used for the manuscript-facing comparison and are retained for provenance rather than as current project names.
+
 ## Notes on the earlier unstable `bert-for-patents` run
 
 An earlier `anferico/bert-for-patents` run (see `metadata/bert_for_patents_report_2026-01-28.md`) showed MPS out-of-memory warnings and a collapsed classifier (predicting “yes” for almost everything). The safe rerun eliminates the MPS issues and produces strong metrics.
